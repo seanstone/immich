@@ -149,7 +149,10 @@
       return;
     }
 
-    const currentTop = scrollableElement?.scrollTop || 0;
+    // currentTop is DOM-scroll space; asset/visibleWindow positions are LAYOUT space.
+    // Convert scrollTop to layout space so distances are measured in the same coordinate
+    // system, then convert the chosen layout target back to scroll space for scrollTo().
+    const currentTopLayout = timelineManager.scrollToLayout(scrollableElement?.scrollTop || 0);
     const viewportHeight = visibleBottom - visibleTop;
 
     // Calculate the minimum scroll needed to bring the asset into view.
@@ -159,16 +162,16 @@
 
     // Option 1: Scroll so the top of the asset is at the top of the viewport
     const scrollToAlignTop = assetTop;
-    const distanceToAlignTop = Math.abs(scrollToAlignTop - currentTop);
+    const distanceToAlignTop = Math.abs(scrollToAlignTop - currentTopLayout);
 
     // Option 2: Scroll so the bottom of the asset is at the bottom of the viewport
     const scrollToAlignBottom = assetBottom - viewportHeight;
-    const distanceToAlignBottom = Math.abs(scrollToAlignBottom - currentTop);
+    const distanceToAlignBottom = Math.abs(scrollToAlignBottom - currentTopLayout);
 
     // Choose whichever option requires the minimum scroll distance
     const scrollTarget = distanceToAlignTop < distanceToAlignBottom ? scrollToAlignTop : scrollToAlignBottom;
 
-    timelineManager.scrollTo(scrollTarget);
+    timelineManager.scrollTo(timelineManager.layoutToScroll(scrollTarget));
   };
 
   const scrollAndLoadAsset = async (assetId: string) => {
@@ -293,9 +296,10 @@
     const noMonth = !scrubberMonth;
 
     if (noMonth || timelineManager.limitedScroll) {
-      // edge case - scroll limited due to size of content, must adjust - use use the overall percent instead
-      const maxScroll = timelineManager.maxScrollPercent;
-      const offset = maxScroll * overallScrollPercent * timelineManager.totalViewerHeight;
+      // Routed for two cases: small libraries (factor === 1, content barely scrolls) AND
+      // huge libraries where the cap forced a low compression factor — both want the
+      // scrubber to map overall position straight to DOM scroll range.
+      const offset = overallScrollPercent * timelineManager.maxScroll;
       timelineManager.scrollTo(offset);
     } else if (leadIn) {
       scrollToSegmentPercentage(0, timelineManager.topSectionHeight, scrubberMonthScrollPercent);
@@ -329,7 +333,8 @@
       // edge case - scroll limited due to size of content, must adjust -  use the overall percent instead
       const maxScroll = timelineManager.maxScroll;
 
-      timelineScrollPercent = Math.min(1, scrollableElement.scrollTop / maxScroll);
+      // Guard against divide-by-zero on empty libraries / content < viewport.
+      timelineScrollPercent = maxScroll > 0 ? Math.min(1, scrollableElement.scrollTop / maxScroll) : 0;
       viewportTopMonth = undefined;
       viewportTopMonthScrollPercent = 0;
     } else {
@@ -620,13 +625,14 @@
   bind:this={scrollableElement}
   onscroll={() => (handleTimelineScroll(), timelineManager.updateSlidingWindow(), updateIsScrolling())}
 >
-  <section id="virtual-timeline" class:invisible style:height={timelineManager.totalViewerHeight + 'px'}>
+  <section id="virtual-timeline" class:invisible style:height={timelineManager.renderedHeight + 'px'}>
     <section
       bind:clientHeight={timelineManager.topSectionHeight}
       class:invisible
       style:position="absolute"
       style:left="0"
       style:right="0"
+      style:transform={`translate3d(0,${-timelineManager.renderOffset}px,0)`}
     >
       {@render children?.()}
       {#if isEmpty}
@@ -636,11 +642,11 @@
     </section>
 
     {#each timelineManager.months as timelineMonth (timelineMonth.viewId)}
-      {#if !timelineMonth.isLoaded}
+      {#if !timelineMonth.isLoaded && timelineMonth.isInOrNearViewport}
         <div
           style:height={timelineMonth.height + 'px'}
           style:position="absolute"
-          style:transform={`translate3d(0,${timelineMonth.top}px,0)`}
+          style:transform={`translate3d(0,${timelineMonth.top - timelineManager.renderOffset}px,0)`}
           style:width="100%"
         >
           <Skeleton {invisible} height={timelineMonth.height} title={timelineMonth.title} />
@@ -650,7 +656,7 @@
           class="timeline-month"
           style:height={timelineMonth.height + 'px'}
           style:position="absolute"
-          style:transform={`translate3d(0,${timelineMonth.top}px,0)`}
+          style:transform={`translate3d(0,${timelineMonth.top - timelineManager.renderOffset}px,0)`}
           style:width="100%"
         >
           <Month
@@ -708,7 +714,7 @@
       style:position="absolute"
       style:left="0"
       style:right="0"
-      style:transform={`translate3d(0,${timelineManager.topSectionHeight + timelineManager.bodySectionHeight}px,0)`}
+      style:transform={`translate3d(0,${timelineManager.topSectionHeight + timelineManager.bodySectionHeight - timelineManager.renderOffset}px,0)`}
     ></div>
   </section>
 </section>
@@ -723,6 +729,19 @@
   #asset-grid {
     contain: strict;
     scrollbar-width: none;
+  }
+
+  /* position: relative makes #virtual-timeline the containing block for its absolutely-
+     positioned month divs (otherwise their CB is #asset-grid, which has contain: strict
+     and would expand its scrollable overflow to the largest renderY among them — up to
+     ~totalLayoutHeight on a huge library, which the browser then clamps back to the cap
+     and #asset-grid.scrollHeight flickers between rendered and ~2^24 as the user scrolls).
+     overflow: clip then keeps anything translated outside the renderedHeight box (far
+     skeleton months, lead-out spacer when scrolled up) from pushing the scroll container's
+     scrollHeight past the explicit style.height. See immich-app/immich#16788. */
+  #virtual-timeline {
+    position: relative;
+    overflow: clip;
   }
 
   .timeline-month {
