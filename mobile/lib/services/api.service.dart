@@ -191,7 +191,18 @@ class ApiService {
   }
 
   static Map<String, String> getRequestHeaders() {
-    return SettingsRepository.instance.appConfig.network.customHeaders;
+    final headers = Map<String, String>.of(SettingsRepository.instance.appConfig.network.customHeaders);
+    // A user-defined Cookie header suppresses the native HTTP clients' cookie
+    // handling, dropping the immich_access_token session cookie. Send the
+    // session token as a header instead so both credentials reach the server.
+    final hasCookieHeader = headers.keys.any((key) => key.toLowerCase() == 'cookie');
+    if (hasCookieHeader) {
+      final token = Store.tryGet(StoreKey.accessToken);
+      if (token != null && token.isNotEmpty) {
+        headers['x-immich-user-token'] = token;
+      }
+    }
+    return headers;
   }
 
   ApiClient get apiClient => _apiClient;
