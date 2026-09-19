@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:drift/drift.dart';
 import 'package:easy_localization/easy_localization.dart';
+import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/data/db/main/database.dart';
 import 'package:immich_mobile/data/db/main/table/local/asset.dart';
 import 'package:immich_mobile/data/db/main/table/remote/asset.dart';
@@ -44,10 +45,14 @@ class TimelineRepository extends DatabaseAccessor<Drift> with $TimelineRepositor
       throw UnsupportedError("GroupAssetsBy.none is not supported for watchMainBucket");
     }
 
-    return _db.mergedAssetDrift.mergedBucket(userIds: userIds, groupBy: groupBy.index).map((row) {
-      final date = row.bucketDate.truncateDate(groupBy);
-      return TimeBucket(date: date, assetCount: row.assetCount);
-    }).watch();
+    return _db.mergedAssetDrift
+        .mergedBucket(userIds: userIds, groupBy: groupBy.index)
+        .map((row) {
+          final date = row.bucketDate.truncateDate(groupBy);
+          return TimeBucket(date: date, assetCount: row.assetCount);
+        })
+        .watch()
+        .throttle(kTimelineBucketThrottle, trailing: true);
   }
 
   Future<List<BaseAsset>> _getMainBucketAssets(List<String> userIds, {required int offset, required int count}) {
