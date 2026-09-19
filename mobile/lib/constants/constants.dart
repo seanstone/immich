@@ -28,6 +28,11 @@ const String kShareDownloadGroup = 'group_share';
 // Timeline constants
 const int kTimelineAssetLoadBatchSize = 1024;
 const int kTimelineAssetLoadOppositeSize = 64;
+// Coalesces main timeline rebuilds. Each emission re-runs the mergedBucket
+// aggregate over every remote asset plus a page load, so sync writes would
+// otherwise retrigger it hundreds of times on a large library. The leading
+// event still emits immediately, so first paint is not delayed.
+const Duration kTimelineBucketThrottle = Duration(seconds: 10);
 
 // Widget keys
 const String kWidgetAuthToken = "widget_auth_token";
