@@ -57,7 +57,7 @@ class TimelineRepository extends DatabaseAccessor<Drift> with $TimelineRepositor
 
   Future<List<BaseAsset>> _getMainBucketAssets(List<String> userIds, {required int offset, required int count}) {
     return _db.mergedAssetDrift
-        .mergedAsset(userIds: userIds, limit: (_) => Limit(count, offset))
+        .mergedAsset(userIds: userIds, count: count, offset: offset)
         .map(
           (row) => row.remoteId != null && row.ownerId != null
               ? RemoteAsset(
