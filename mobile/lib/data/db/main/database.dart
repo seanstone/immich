@@ -161,7 +161,7 @@ class Drift extends $Drift {
   }
 
   @override
-  int get schemaVersion => 33;
+  int get schemaVersion => 34;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -365,6 +365,9 @@ class Drift extends $Drift {
               from32To33: (m, v33) async {
                 await m.createIndex(v33.idxRemoteAssetTimelineOrder);
                 await m.createIndex(v33.idxRemoteAssetIdDeleted);
+              },
+              from33To34: (m, v34) async {
+                await m.createIndex(v34.idxRemoteAssetChecksumOwner);
               },
             ),
           ),

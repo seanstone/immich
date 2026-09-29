@@ -31,6 +31,9 @@ CREATE INDEX IF NOT EXISTS idx_remote_asset_timeline_order
 ON remote_asset_entity (owner_id, visibility, deleted_at, created_at DESC, id DESC, stack_id);
 ''')
 @TableIndex.sql('CREATE INDEX IF NOT EXISTS idx_remote_asset_id_deleted ON remote_asset_entity (id, deleted_at)')
+@TableIndex.sql(
+  'CREATE INDEX IF NOT EXISTS idx_remote_asset_checksum_owner ON remote_asset_entity (checksum, owner_id)',
+)
 class RemoteAssetEntity extends Table with DriftDefaultsMixin, AssetEntityMixin {
   const RemoteAssetEntity();
 
