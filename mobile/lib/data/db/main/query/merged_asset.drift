@@ -4,7 +4,7 @@ import '../table/local/asset.dart';
 import '../table/local/album.dart';
 import '../table/local/album_asset.dart';
 
-mergedAsset:
+mergedAsset AS MergedAssetRow:
 -- Page on the narrow sort keys first, then fetch full rows for that page only.
 -- A UNION ALL with OFFSET otherwise materialises every skipped row in full,
 -- making deep pages cost linear in the whole library.
@@ -12,7 +12,8 @@ WITH page AS (
 	SELECT
 		rae.id as remote_id,
 		NULL as local_id,
-		rae.created_at as created_at,
+		rae.created_at as page_created_at,
+		CAST(rae.created_at AS TEXT) as sort_created_at,
 		rae.id as sort_id
 	FROM
 		remote_asset_entity rae
@@ -32,7 +33,8 @@ WITH page AS (
 	SELECT
 		NULL as remote_id,
 		lae.id as local_id,
-		lae.created_at as created_at,
+		lae.created_at as page_created_at,
+		CAST(lae.created_at AS TEXT) as sort_created_at,
 		lae.id as sort_id
 	FROM
 		local_asset_entity lae
@@ -49,7 +51,7 @@ WITH page AS (
 		INNER JOIN local_album_entity la on laa.album_id = la.id
 		WHERE laa.asset_id = lae.id AND la.backup_selection = 2 -- excluded
 	)
-	ORDER BY created_at DESC, sort_id DESC
+	ORDER BY page_created_at DESC, sort_id DESC
 	LIMIT :count OFFSET :offset
 )
 SELECT
@@ -76,6 +78,7 @@ SELECT
 	rae.is_edited,
 	0 as playback_style,
 	rae.uploaded_at,
+	page.sort_created_at,
 	page.sort_id
 FROM
 	page
@@ -108,6 +111,240 @@ SELECT
 	0 as is_edited,
 	lae.playback_style,
 	NULL as uploaded_at,
+	page.sort_created_at,
+	page.sort_id
+FROM
+	page
+INNER JOIN
+	local_asset_entity lae ON lae.id = page.local_id
+ORDER BY created_at DESC, sort_id DESC;
+
+mergedAssetOlderThan(:cursor_created_at AS TEXT, :cursor_sort_id AS TEXT) AS MergedAssetRow:
+-- Keyset page: the :count assets that sort directly after the cursor. The
+-- cursor is the raw stored created_at text, compared as text so it matches
+-- the index exactly; seeks instead of counting past newer assets.
+WITH page AS (
+	SELECT
+		rae.id as remote_id,
+		NULL as local_id,
+		rae.created_at as page_created_at,
+		CAST(rae.created_at AS TEXT) as sort_created_at,
+		rae.id as sort_id
+	FROM
+		remote_asset_entity rae
+	LEFT JOIN
+		stack_entity se ON rae.stack_id = se.id
+	WHERE
+		rae.deleted_at IS NULL
+		AND rae.visibility = 0 -- timeline visibility
+		AND rae.owner_id IN :user_ids
+		AND (
+			rae.stack_id IS NULL
+			OR rae.id = se.primary_asset_id
+		)
+		AND (rae.created_at, rae.id) < (:cursor_created_at, :cursor_sort_id)
+
+	UNION ALL
+
+	SELECT
+		NULL as remote_id,
+		lae.id as local_id,
+		lae.created_at as page_created_at,
+		CAST(lae.created_at AS TEXT) as sort_created_at,
+		lae.id as sort_id
+	FROM
+		local_asset_entity lae
+	WHERE NOT EXISTS (
+		SELECT 1 FROM remote_asset_entity rae WHERE rae.checksum = lae.checksum AND rae.owner_id IN :user_ids
+	)
+	AND EXISTS (
+		SELECT 1 FROM local_album_asset_entity laa
+		INNER JOIN local_album_entity la on laa.album_id = la.id
+		WHERE laa.asset_id = lae.id AND la.backup_selection = 0 -- selected
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM local_album_asset_entity laa
+		INNER JOIN local_album_entity la on laa.album_id = la.id
+		WHERE laa.asset_id = lae.id AND la.backup_selection = 2 -- excluded
+	)
+	AND (lae.created_at, lae.id) < (:cursor_created_at, :cursor_sort_id)
+	ORDER BY page_created_at DESC, sort_id DESC
+	LIMIT :count
+)
+SELECT
+	rae.id as remote_id,
+	(SELECT lae.id FROM local_asset_entity lae WHERE lae.checksum = rae.checksum LIMIT 1) as local_id,
+	rae.name,
+	rae."type",
+	rae.created_at as created_at,
+	rae.updated_at,
+	rae.width,
+	rae.height,
+	rae.duration_ms,
+	rae.is_favorite,
+	rae.thumb_hash,
+	rae.checksum,
+	rae.owner_id,
+	rae.live_photo_video_id,
+	0 as orientation,
+	rae.stack_id,
+	NULL as i_cloud_id,
+	NULL as latitude,
+	NULL as longitude,
+	NULL as adjustmentTime,
+	rae.is_edited,
+	0 as playback_style,
+	rae.uploaded_at,
+	page.sort_created_at,
+	page.sort_id
+FROM
+	page
+INNER JOIN
+	remote_asset_entity rae ON rae.id = page.remote_id
+
+UNION ALL
+
+SELECT
+	NULL as remote_id,
+	lae.id as local_id,
+	lae.name,
+	lae."type",
+	lae.created_at as created_at,
+	lae.updated_at,
+	lae.width,
+	lae.height,
+	lae.duration_ms,
+	lae.is_favorite,
+	NULL as thumb_hash,
+	lae.checksum,
+	NULL as owner_id,
+	NULL as live_photo_video_id,
+	lae.orientation,
+	NULL as stack_id,
+	lae.i_cloud_id,
+	lae.latitude,
+	lae.longitude,
+	lae.adjustment_time,
+	0 as is_edited,
+	lae.playback_style,
+	NULL as uploaded_at,
+	page.sort_created_at,
+	page.sort_id
+FROM
+	page
+INNER JOIN
+	local_asset_entity lae ON lae.id = page.local_id
+ORDER BY created_at DESC, sort_id DESC;
+
+mergedAssetNewerThan(:cursor_created_at AS TEXT, :cursor_sort_id AS TEXT) AS MergedAssetRow:
+-- Keyset page: the :count assets that sort directly before the cursor,
+-- returned in timeline order.
+WITH page AS (
+	SELECT
+		rae.id as remote_id,
+		NULL as local_id,
+		rae.created_at as page_created_at,
+		CAST(rae.created_at AS TEXT) as sort_created_at,
+		rae.id as sort_id
+	FROM
+		remote_asset_entity rae
+	LEFT JOIN
+		stack_entity se ON rae.stack_id = se.id
+	WHERE
+		rae.deleted_at IS NULL
+		AND rae.visibility = 0 -- timeline visibility
+		AND rae.owner_id IN :user_ids
+		AND (
+			rae.stack_id IS NULL
+			OR rae.id = se.primary_asset_id
+		)
+		AND (rae.created_at, rae.id) > (:cursor_created_at, :cursor_sort_id)
+
+	UNION ALL
+
+	SELECT
+		NULL as remote_id,
+		lae.id as local_id,
+		lae.created_at as page_created_at,
+		CAST(lae.created_at AS TEXT) as sort_created_at,
+		lae.id as sort_id
+	FROM
+		local_asset_entity lae
+	WHERE NOT EXISTS (
+		SELECT 1 FROM remote_asset_entity rae WHERE rae.checksum = lae.checksum AND rae.owner_id IN :user_ids
+	)
+	AND EXISTS (
+		SELECT 1 FROM local_album_asset_entity laa
+		INNER JOIN local_album_entity la on laa.album_id = la.id
+		WHERE laa.asset_id = lae.id AND la.backup_selection = 0 -- selected
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM local_album_asset_entity laa
+		INNER JOIN local_album_entity la on laa.album_id = la.id
+		WHERE laa.asset_id = lae.id AND la.backup_selection = 2 -- excluded
+	)
+	AND (lae.created_at, lae.id) > (:cursor_created_at, :cursor_sort_id)
+	ORDER BY page_created_at ASC, sort_id ASC
+	LIMIT :count
+)
+SELECT
+	rae.id as remote_id,
+	(SELECT lae.id FROM local_asset_entity lae WHERE lae.checksum = rae.checksum LIMIT 1) as local_id,
+	rae.name,
+	rae."type",
+	rae.created_at as created_at,
+	rae.updated_at,
+	rae.width,
+	rae.height,
+	rae.duration_ms,
+	rae.is_favorite,
+	rae.thumb_hash,
+	rae.checksum,
+	rae.owner_id,
+	rae.live_photo_video_id,
+	0 as orientation,
+	rae.stack_id,
+	NULL as i_cloud_id,
+	NULL as latitude,
+	NULL as longitude,
+	NULL as adjustmentTime,
+	rae.is_edited,
+	0 as playback_style,
+	rae.uploaded_at,
+	page.sort_created_at,
+	page.sort_id
+FROM
+	page
+INNER JOIN
+	remote_asset_entity rae ON rae.id = page.remote_id
+
+UNION ALL
+
+SELECT
+	NULL as remote_id,
+	lae.id as local_id,
+	lae.name,
+	lae."type",
+	lae.created_at as created_at,
+	lae.updated_at,
+	lae.width,
+	lae.height,
+	lae.duration_ms,
+	lae.is_favorite,
+	NULL as thumb_hash,
+	lae.checksum,
+	NULL as owner_id,
+	NULL as live_photo_video_id,
+	lae.orientation,
+	NULL as stack_id,
+	lae.i_cloud_id,
+	lae.latitude,
+	lae.longitude,
+	lae.adjustment_time,
+	0 as is_edited,
+	lae.playback_style,
+	NULL as uploaded_at,
+	page.sort_created_at,
 	page.sort_id
 FROM
 	page

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
+import 'package:immich_mobile/domain/services/timeline.service.dart';
 import 'package:immich_mobile/infrastructure/repositories/timeline.repository.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
@@ -20,6 +21,92 @@ void main() {
 
   tearDown(() async {
     await ctx.dispose();
+  });
+
+  group('main timeline keyset paging', () {
+    String keyOf(BaseAsset asset) => asset is RemoteAsset ? 'r:${asset.id}' : 'l:${(asset as LocalAsset).id}';
+
+    // 40 remote assets in groups of 3 sharing a timestamp, plus local-only assets
+    // interleaved with them (some on the same timestamps) and one local asset that
+    // is already backed up and must only appear as its remote copy.
+    Future<({TimelineKeysetSource keyset, List<String> reference, List<TimelineCursor> cursors})> seed() async {
+      final user = await ctx.newUser();
+      final album = await ctx.newLocalAlbum(backupSelection: .selected);
+      final base = DateTime.utc(2024, 1, 1);
+      for (var i = 0; i < 40; i++) {
+        await ctx.newRemoteAsset(
+          ownerId: user.id,
+          checksum: 'remote-$i',
+          createdAt: base.add(Duration(hours: i ~/ 3)),
+        );
+      }
+      for (var i = 0; i < 6; i++) {
+        final local = await ctx.newLocalAsset(
+          checksum: 'local-$i',
+          createdAt: base.add(Duration(hours: i * 2, minutes: i.isEven ? 0 : 30)),
+        );
+        await ctx.newLocalAlbumAsset(albumId: album.id, assetId: local.id);
+      }
+      final backedUp = await ctx.newLocalAsset(checksum: 'remote-7', createdAt: base);
+      await ctx.newLocalAlbumAsset(albumId: album.id, assetId: backedUp.id);
+
+      final keyset = sut.mainKeyset([user.id]);
+      final reference = <String>[];
+      final cursors = <TimelineCursor>[];
+      for (var offset = 0; ; offset += 7) {
+        final page = await keyset.atOffset(offset, 7);
+        if (page.assets.isEmpty) {
+          break;
+        }
+        reference.addAll(page.assets.map(keyOf));
+        cursors.addAll(page.cursors);
+      }
+      return (keyset: keyset, reference: reference, cursors: cursors);
+    }
+
+    test('offset paging returns every asset exactly once, matching the offset asset source', () async {
+      final (:keyset, :reference, cursors: _) = await seed();
+      expect(reference, hasLength(46));
+      expect(reference.toSet(), hasLength(46));
+
+      final userId = (await ctx.db.select(ctx.db.userEntity).getSingle()).id;
+      final viaAssetSource = (await sut.main([userId], .day).assetSource(0, 100)).map(keyOf).toList();
+      expect(viaAssetSource, reference);
+    });
+
+    // Page sizes 1-8 against groups of 3 equal timestamps guarantee page
+    // boundaries that split a tie group, where a missing tiebreaker drops assets.
+    test('seeking older from each page end reproduces offset paging, ties included', () async {
+      final (:keyset, :reference, cursors: _) = await seed();
+      for (var size = 1; size <= 8; size++) {
+        var page = await keyset.atOffset(0, size);
+        final walked = [...page.assets.map(keyOf)];
+        while (true) {
+          page = await keyset.olderThan(page.cursors.last, size);
+          if (page.assets.isEmpty) {
+            break;
+          }
+          walked.addAll(page.assets.map(keyOf));
+        }
+        expect(walked, reference, reason: 'page size $size');
+      }
+    });
+
+    test('seeking newer from each page start reproduces offset paging, ties included', () async {
+      final (:keyset, :reference, cursors: _) = await seed();
+      for (var size = 1; size <= 8; size++) {
+        var page = await keyset.atOffset(reference.length - size, size);
+        final walked = [...page.assets.map(keyOf)];
+        while (true) {
+          page = await keyset.newerThan(page.cursors.first, size);
+          if (page.assets.isEmpty) {
+            break;
+          }
+          walked.insertAll(0, page.assets.map(keyOf));
+        }
+        expect(walked, reference, reason: 'page size $size');
+      }
+    });
   });
 
   group('remoteAlbum assets', () {
