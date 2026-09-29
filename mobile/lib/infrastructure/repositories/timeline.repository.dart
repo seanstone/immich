@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/data/db/main/database.dart';
+import 'package:immich_mobile/data/db/main/query/merged_asset.drift.dart';
 import 'package:immich_mobile/data/db/main/table/local/asset.dart';
 import 'package:immich_mobile/data/db/main/table/remote/asset.dart';
 import 'package:immich_mobile/data/db/main/table/remote/asset.drift.dart';
@@ -55,53 +56,81 @@ class TimelineRepository extends DatabaseAccessor<Drift> with $TimelineRepositor
         .throttle(kTimelineBucketThrottle, trailing: true);
   }
 
-  Future<List<BaseAsset>> _getMainBucketAssets(List<String> userIds, {required int offset, required int count}) {
-    return _db.mergedAssetDrift
-        .mergedAsset(userIds: userIds, count: count, offset: offset)
-        .map(
-          (row) => row.remoteId != null && row.ownerId != null
-              ? RemoteAsset(
-                  id: row.remoteId!,
-                  localId: row.localId,
-                  name: row.name,
-                  ownerId: row.ownerId!,
-                  checksum: row.checksum,
-                  type: row.type,
-                  createdAt: row.createdAt,
-                  updatedAt: row.updatedAt,
-                  uploadedAt: row.uploadedAt,
-                  thumbHash: row.thumbHash,
-                  width: row.width,
-                  height: row.height,
-                  isFavorite: row.isFavorite,
-                  durationMs: row.durationMs,
-                  livePhotoVideoId: row.livePhotoVideoId,
-                  stackId: row.stackId,
-                  isEdited: row.isEdited,
-                )
-              : LocalAsset(
-                  id: row.localId!,
-                  remoteId: row.remoteId,
-                  name: row.name,
-                  checksum: row.checksum,
-                  type: row.type,
-                  createdAt: row.createdAt,
-                  updatedAt: row.updatedAt,
-                  width: row.width,
-                  height: row.height,
-                  isFavorite: row.isFavorite,
-                  durationMs: row.durationMs,
-                  orientation: row.orientation,
-                  playbackStyle: AssetPlaybackStyle.values[row.playbackStyle],
-                  cloudId: row.iCloudId,
-                  latitude: row.latitude,
-                  longitude: row.longitude,
-                  adjustmentTime: row.adjustmentTime,
-                  isEdited: row.isEdited,
-                ),
-        )
-        .get();
+  Future<List<BaseAsset>> _getMainBucketAssets(List<String> userIds, {required int offset, required int count}) async {
+    final rows = await _db.mergedAssetDrift.mergedAsset(userIds: userIds, count: count, offset: offset).get();
+    return rows.map(_toMainAsset).toList();
   }
+
+  TimelineKeysetSource mainKeyset(List<String> userIds) => (
+    atOffset: (offset, count) async =>
+        _toMainPage(await _db.mergedAssetDrift.mergedAsset(userIds: userIds, count: count, offset: offset).get()),
+    olderThan: (cursor, count) async => _toMainPage(
+      await _db.mergedAssetDrift
+          .mergedAssetOlderThan(
+            userIds: userIds,
+            cursorCreatedAt: cursor.createdAt,
+            cursorSortId: cursor.id,
+            count: count,
+          )
+          .get(),
+    ),
+    newerThan: (cursor, count) async => _toMainPage(
+      await _db.mergedAssetDrift
+          .mergedAssetNewerThan(
+            userIds: userIds,
+            cursorCreatedAt: cursor.createdAt,
+            cursorSortId: cursor.id,
+            count: count,
+          )
+          .get(),
+    ),
+  );
+
+  TimelinePage _toMainPage(List<MergedAssetRow> rows) => (
+    assets: rows.map(_toMainAsset).toList(),
+    cursors: [for (final row in rows) (createdAt: row.sortCreatedAt, id: row.sortId)],
+  );
+
+  BaseAsset _toMainAsset(MergedAssetRow row) => row.remoteId != null && row.ownerId != null
+      ? RemoteAsset(
+          id: row.remoteId!,
+          localId: row.localId,
+          name: row.name,
+          ownerId: row.ownerId!,
+          checksum: row.checksum,
+          type: row.type,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+          uploadedAt: row.uploadedAt,
+          thumbHash: row.thumbHash,
+          width: row.width,
+          height: row.height,
+          isFavorite: row.isFavorite,
+          durationMs: row.durationMs,
+          livePhotoVideoId: row.livePhotoVideoId,
+          stackId: row.stackId,
+          isEdited: row.isEdited,
+        )
+      : LocalAsset(
+          id: row.localId!,
+          remoteId: row.remoteId,
+          name: row.name,
+          checksum: row.checksum,
+          type: row.type,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+          width: row.width,
+          height: row.height,
+          isFavorite: row.isFavorite,
+          durationMs: row.durationMs,
+          orientation: row.orientation,
+          playbackStyle: AssetPlaybackStyle.values[row.playbackStyle],
+          cloudId: row.iCloudId,
+          latitude: row.latitude,
+          longitude: row.longitude,
+          adjustmentTime: row.adjustmentTime,
+          isEdited: row.isEdited,
+        );
 
   TimelineQuery localAlbum(String albumId, GroupAssetsBy groupBy) => (
     bucketSource: () => _watchLocalAlbumBucket(albumId, groupBy: groupBy),

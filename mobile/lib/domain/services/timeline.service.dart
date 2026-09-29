@@ -18,6 +18,20 @@ typedef TimelineBucketSource = Stream<List<Bucket>> Function();
 
 typedef TimelineQuery = ({TimelineAssetSource assetSource, TimelineBucketSource bucketSource, TimelineOrigin origin});
 
+/// Position of an asset in the timeline's sort order: the raw stored created_at
+/// text and the id used to break ties.
+typedef TimelineCursor = ({String createdAt, String id});
+
+typedef TimelinePage = ({List<BaseAsset> assets, List<TimelineCursor> cursors});
+
+/// Lets a timeline seek from an already loaded asset instead of counting past
+/// every newer asset, so continuous scrolling costs the same at any depth.
+typedef TimelineKeysetSource = ({
+  Future<TimelinePage> Function(int offset, int count) atOffset,
+  Future<TimelinePage> Function(TimelineCursor cursor, int count) olderThan,
+  Future<TimelinePage> Function(TimelineCursor cursor, int count) newerThan,
+});
+
 enum TimelineOrigin {
   main,
   localAlbum,
@@ -50,7 +64,10 @@ class TimelineFactory {
     return group == GroupAssetsBy.auto ? GroupAssetsBy.day : group;
   }
 
-  TimelineService main(List<String> timelineUsers) => TimelineService(_timelineRepository.main(timelineUsers, groupBy));
+  TimelineService main(List<String> timelineUsers) => TimelineService(
+    _timelineRepository.main(timelineUsers, groupBy),
+    keysetSource: _timelineRepository.mainKeyset(timelineUsers),
+  );
 
   TimelineService localAlbum({required String albumId}) =>
       TimelineService(_timelineRepository.localAlbum(albumId, groupBy));
@@ -96,20 +113,33 @@ class TimelineFactory {
 
 class TimelineService {
   final TimelineAssetSource _assetSource;
+  final TimelineKeysetSource? _keysetSource;
   final TimelineBucketSource _bucketSource;
   final TimelineOrigin origin;
   final AsyncMutex _mutex = AsyncMutex();
   int _bufferOffset = 0;
   List<BaseAsset> _buffer = [];
+  // Sort keys for [_buffer], filled only when the timeline has a keyset source
+  List<TimelineCursor> _cursors = [];
   StreamSubscription? _bucketSubscription;
 
   int _totalAssets = 0;
   int get totalAssets => _totalAssets;
 
-  TimelineService(TimelineQuery query)
-    : this._(assetSource: query.assetSource, bucketSource: query.bucketSource, origin: query.origin);
+  TimelineService(TimelineQuery query, {TimelineKeysetSource? keysetSource})
+    : this._(
+        assetSource: query.assetSource,
+        keysetSource: keysetSource,
+        bucketSource: query.bucketSource,
+        origin: query.origin,
+      );
 
-  TimelineService._({required this._assetSource, required this._bucketSource, required this.origin}) {
+  TimelineService._({
+    required this._assetSource,
+    required this._keysetSource,
+    required this._bucketSource,
+    required this.origin,
+  }) {
     _bucketSubscription = _bucketSource().listen((buckets) {
       unawaited(
         _mutex.run(() async {
@@ -118,6 +148,7 @@ class TimelineService {
           if (totalAssets == 0) {
             _bufferOffset = 0;
             _buffer = [];
+            _cursors = [];
           } else {
             final int offset;
             final int count;
@@ -130,8 +161,7 @@ class TimelineService {
               offset = _bufferOffset;
               count = math.min(_buffer.length, totalAssets - _bufferOffset);
             }
-            _buffer = await _assetSource(offset, count);
-            _bufferOffset = offset;
+            await _loadAtOffset(offset, count);
           }
 
           // change the state's total assets count only after the buffer is reloaded
@@ -168,10 +198,53 @@ class TimelineService {
           : (len > kTimelineAssetLoadBatchSize ? index : index + count - len),
     );
 
-    _buffer = await _assetSource(start, len);
-    _bufferOffset = start;
+    final page = await _seekFromNeighbour(start, len);
+    if (page == null) {
+      await _loadAtOffset(start, len);
+    } else {
+      _buffer = page.assets;
+      _cursors = page.cursors;
+      _bufferOffset = start;
+    }
 
     return getAssets(index, count);
+  }
+
+  Future<void> _loadAtOffset(int offset, int count) async {
+    final keysetSource = _keysetSource;
+    if (keysetSource == null) {
+      _buffer = await _assetSource(offset, count);
+      _cursors = [];
+    } else {
+      final page = await keysetSource.atOffset(offset, count);
+      _buffer = page.assets;
+      _cursors = page.cursors;
+    }
+    _bufferOffset = offset;
+  }
+
+  /// Loads the window [start, start + len) by seeking from the loaded asset
+  /// directly before or after it. Returns null when there is no such neighbour
+  /// (e.g. a scrubber jump) or the library changed since it was loaded.
+  Future<TimelinePage?> _seekFromNeighbour(int start, int len) async {
+    final keysetSource = _keysetSource;
+    final expected = math.min(len, _totalAssets - start);
+    if (keysetSource == null || expected <= 0 || _cursors.length != _buffer.length) {
+      return null;
+    }
+
+    final before = start - 1 - _bufferOffset;
+    final after = start + expected - _bufferOffset;
+    final TimelinePage page;
+    if (before >= 0 && before < _cursors.length) {
+      page = await keysetSource.olderThan(_cursors[before], expected);
+    } else if (after >= 0 && after < _cursors.length) {
+      page = await keysetSource.newerThan(_cursors[after], expected);
+    } else {
+      return null;
+    }
+
+    return page.assets.length == expected ? page : null;
   }
 
   bool hasRange(int index, int count) =>
@@ -244,6 +317,7 @@ class TimelineService {
     await _bucketSubscription?.cancel();
     _bucketSubscription = null;
     _buffer = [];
+    _cursors = [];
     _bufferOffset = 0;
   }
 }
