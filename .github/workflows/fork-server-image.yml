@@ -4,7 +4,7 @@ name: Fork server image
 
 on:
   push:
-    branches: [fix/mobile-custom-cookie-header-auth]
+    branches: [my]
     paths: ['server/**', 'web/**', 'open-api/**', 'packages/**', 'i18n/**', 'pnpm-lock.yaml', '.github/workflows/fork-server-image.yml']
   workflow_dispatch:
 
