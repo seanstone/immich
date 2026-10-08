@@ -481,11 +481,33 @@ Future<(SqliteConnection, SqliteConnectionPool)> openSqliteConnectionWithUpdateP
   final file = await _databaseFile(name);
   final db = _openImmichDatabase(file);
   await db.initialize();
+  await rollBackForkSchemaVersion(db);
   final updatePool = SqliteConnectionPool.open(
     name: file.path,
     openConnections: () => throw StateError('Pool for "$name" should already be open via sqlite_async'),
   );
   return (db, updatePool);
+}
+
+// Fork builds before v3.3.0 stored their own index migrations as schema
+// versions 32-34, which upstream later reused for different migrations. Such a
+// database reports 32-34 without upstream's v32 column, so drift would skip
+// upstream's steps. Rolling it back to 31 lets them run on the next open; the
+// leftover fork indexes are harmless. The check and rollback share one write
+// transaction, so concurrently opening isolates cannot roll back twice.
+@visibleForTesting
+Future<void> rollBackForkSchemaVersion(SqliteConnection db) async {
+  await db.writeTransaction((tx) async {
+    final version = (await tx.get('PRAGMA user_version'))['user_version'] as int;
+    if (version < 32 || version > 34) {
+      return;
+    }
+    final columns = await tx.getAll("SELECT name FROM pragma_table_info('local_asset_entity')");
+    if (columns.any((row) => row['name'] == 'previous_checksum')) {
+      return;
+    }
+    await tx.execute('PRAGMA user_version = 31');
+  });
 }
 
 Future<File> _databaseFile(String name) async {
