@@ -24,7 +24,7 @@ void main() {
   // the timeline pairs headers to assets by running offset into one flat list
   Future<List<(String, String)>> headerForEachAsset(GroupAssetsBy groupBy) async {
     final buckets = await ctx.db.mergedAssetDrift.mergedBucket(groupBy: groupBy.index, userIds: [userId]).get();
-    final assets = await ctx.db.mergedAssetDrift.mergedAsset(userIds: [userId], limit: (_) => Limit(1000, 0)).get();
+    final assets = await ctx.db.mergedAssetDrift.mergedAsset(userIds: [userId], count: 1000, offset: 0).get();
 
     final pairs = <(String, String)>[];
     var offset = 0;
