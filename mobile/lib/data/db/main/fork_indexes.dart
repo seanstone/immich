@@ -12,6 +12,8 @@ const kForkIndexes = <String>[
   'CREATE INDEX IF NOT EXISTS idx_remote_asset_timeline_order ON remote_asset_entity (owner_id, visibility, deleted_at, created_at DESC, id DESC, stack_id)',
   // Covers the album list's per-membership trash check.
   'CREATE INDEX IF NOT EXISTS idx_remote_asset_id_deleted ON remote_asset_entity (id, deleted_at)',
+  // Covers the backed-up check that hides local assets with a remote copy.
+  'CREATE INDEX IF NOT EXISTS idx_remote_asset_checksum_owner ON remote_asset_entity (checksum, owner_id)',
 ];
 
 /// Creates any missing index from [kForkIndexes].
