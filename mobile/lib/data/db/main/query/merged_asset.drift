@@ -5,6 +5,53 @@ import '../table/local/album.dart';
 import '../table/local/album_asset.dart';
 
 mergedAsset:
+-- Page on the narrow sort keys first, then fetch full rows for that page only.
+-- A UNION ALL with OFFSET otherwise materialises every skipped row in full,
+-- making deep pages cost linear in the whole library.
+WITH page AS (
+	SELECT
+		rae.id as remote_id,
+		NULL as local_id,
+		rae.created_at as created_at,
+		rae.id as sort_id
+	FROM
+		remote_asset_entity rae
+	LEFT JOIN
+		stack_entity se ON rae.stack_id = se.id
+	WHERE
+		rae.deleted_at IS NULL
+		AND rae.visibility = 0 -- timeline visibility
+		AND rae.owner_id IN :user_ids
+		AND (
+			rae.stack_id IS NULL
+			OR rae.id = se.primary_asset_id
+		)
+
+	UNION ALL
+
+	SELECT
+		NULL as remote_id,
+		lae.id as local_id,
+		lae.created_at as created_at,
+		lae.id as sort_id
+	FROM
+		local_asset_entity lae
+	WHERE NOT EXISTS (
+		SELECT 1 FROM remote_asset_entity rae WHERE rae.checksum = lae.checksum AND rae.owner_id IN :user_ids
+	)
+	AND EXISTS (
+		SELECT 1 FROM local_album_asset_entity laa
+		INNER JOIN local_album_entity la on laa.album_id = la.id
+		WHERE laa.asset_id = lae.id AND la.backup_selection = 0 -- selected
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM local_album_asset_entity laa
+		INNER JOIN local_album_entity la on laa.album_id = la.id
+		WHERE laa.asset_id = lae.id AND la.backup_selection = 2 -- excluded
+	)
+	ORDER BY created_at DESC, sort_id DESC
+	LIMIT :count OFFSET :offset
+)
 SELECT
 	rae.id as remote_id,
 	(SELECT lae.id FROM local_asset_entity lae WHERE lae.checksum = rae.checksum LIMIT 1) as local_id,
@@ -28,19 +75,12 @@ SELECT
 	NULL as adjustmentTime,
 	rae.is_edited,
 	0 as playback_style,
-	rae.uploaded_at
+	rae.uploaded_at,
+	page.sort_id
 FROM
-	remote_asset_entity rae
-LEFT JOIN
-	stack_entity se ON rae.stack_id = se.id
-WHERE
-	rae.deleted_at IS NULL
-	AND rae.visibility = 0 -- timeline visibility
-	AND rae.owner_id IN :user_ids
-	AND (
-		rae.stack_id IS NULL
-		OR rae.id = se.primary_asset_id
-	)
+	page
+INNER JOIN
+	remote_asset_entity rae ON rae.id = page.remote_id
 
 UNION ALL
 
@@ -67,24 +107,13 @@ SELECT
 	lae.adjustment_time,
 	0 as is_edited,
 	lae.playback_style,
-	NULL as uploaded_at
+	NULL as uploaded_at,
+	page.sort_id
 FROM
-	local_asset_entity lae
-WHERE NOT EXISTS (
-	SELECT 1 FROM remote_asset_entity rae WHERE rae.checksum = lae.checksum AND rae.owner_id IN :user_ids
-)
-AND EXISTS (
-	SELECT 1 FROM local_album_asset_entity laa
-	INNER JOIN local_album_entity la on laa.album_id = la.id
-	WHERE laa.asset_id = lae.id AND la.backup_selection = 0 -- selected
-)
-AND NOT EXISTS (
-    SELECT 1 FROM local_album_asset_entity laa
-    INNER JOIN local_album_entity la on laa.album_id = la.id
-    WHERE laa.asset_id = lae.id AND la.backup_selection = 2 -- excluded
-)
-ORDER BY created_at DESC
-LIMIT $limit;
+	page
+INNER JOIN
+	local_asset_entity lae ON lae.id = page.local_id
+ORDER BY created_at DESC, sort_id DESC;
 
 mergedBucket(:group_by AS INTEGER):
 SELECT

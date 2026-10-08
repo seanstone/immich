@@ -7,6 +7,11 @@ import 'package:logging/logging.dart';
 const kForkIndexes = <String>[
   // Makes the main timeline bucket aggregate a covering index scan.
   'CREATE INDEX IF NOT EXISTS idx_remote_asset_timeline_bucket ON remote_asset_entity (owner_id, visibility, deleted_at, local_date_time, created_at, stack_id, id)',
+  // Serves timeline paging in sort order, covering the stack check, so skipped
+  // and sought rows are read from the index alone.
+  'CREATE INDEX IF NOT EXISTS idx_remote_asset_timeline_order ON remote_asset_entity (owner_id, visibility, deleted_at, created_at DESC, id DESC, stack_id)',
+  // Covers the album list's per-membership trash check.
+  'CREATE INDEX IF NOT EXISTS idx_remote_asset_id_deleted ON remote_asset_entity (id, deleted_at)',
 ];
 
 /// Creates any missing index from [kForkIndexes].
