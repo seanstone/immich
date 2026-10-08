@@ -1,0 +1,31 @@
+import 'package:immich_mobile/data/db/main/database.dart';
+import 'package:logging/logging.dart';
+
+/// Indexes added on top of the upstream schema. They are created at runtime
+/// rather than through schema migrations, so no schema version is claimed that
+/// upstream may later use for its own migration.
+const kForkIndexes = <String>[
+  // Makes the main timeline bucket aggregate a covering index scan.
+  'CREATE INDEX IF NOT EXISTS idx_remote_asset_timeline_bucket ON remote_asset_entity (owner_id, visibility, deleted_at, local_date_time, created_at, stack_id, id)',
+];
+
+/// Creates any missing index from [kForkIndexes].
+///
+/// Call from the main isolate only, after the first frame. Building an index on
+/// a populated table holds the write lock for the whole build, and isolates that
+/// open the database meanwhile wait on it up to the busy timeout.
+Future<void> ensureForkIndexes(Drift db) async {
+  final log = Logger('ForkIndexes');
+  for (final statement in kForkIndexes) {
+    final stopwatch = Stopwatch()..start();
+    try {
+      await db.customStatement(statement);
+    } catch (error, stack) {
+      log.warning('Failed to create index: $statement', error, stack);
+      continue;
+    }
+    if (stopwatch.elapsedMilliseconds > 100) {
+      log.info('Built index in ${stopwatch.elapsedMilliseconds}ms: $statement');
+    }
+  }
+}

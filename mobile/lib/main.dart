@@ -14,6 +14,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/constants/locales.dart';
+import 'package:immich_mobile/data/db/main/fork_indexes.dart';
 import 'package:immich_mobile/data/store.dart';
 import 'package:immich_mobile/domain/services/background_worker.service.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
@@ -236,6 +237,7 @@ class ImmichAppState extends ConsumerState<ImmichApp> with WidgetsBindingObserve
     super.initState();
     unawaited(initApp().then((_) => dPrint(() => "App Init Completed")));
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(ensureForkIndexes(ref.read(Store.db)));
       // needs to be delayed so that EasyLocalization is working
       unawaited(ref.read(backgroundWorkerFgServiceProvider).enable());
       if (Platform.isAndroid) {
