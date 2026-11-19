@@ -1,5 +1,7 @@
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:immich_mobile/constants/enums.dart';
+import 'package:immich_mobile/data/db/main/table/remote/asset.drift.dart';
 import 'package:immich_mobile/infrastructure/repositories/remote_album.repository.dart';
 
 import '../repository_context.dart';
@@ -320,6 +322,37 @@ void main() {
 
       // album2 (Jan 1) should come before album1 (Jan 25)
       expect(resultEnd, [album2.id, album1.id]);
+    });
+
+    group('caches the album dates until', () {
+      // album1 holds Jan 10, album2 holds Jan 20, so album1 sorts first by end date
+      Future<({String album1, String album2, String asset1})> seed() async {
+        final album1 = await ctx.newRemoteAlbum(ownerId: userId);
+        final asset1 = await ctx.newRemoteAsset(ownerId: userId, createdAt: DateTime(2024, 1, 10));
+        await ctx.newRemoteAlbumAsset(albumId: album1.id, assetId: asset1.id);
+        final album2 = await ctx.newRemoteAlbum(ownerId: userId);
+        final asset2 = await ctx.newRemoteAsset(ownerId: userId, createdAt: DateTime(2024, 1, 20));
+        await ctx.newRemoteAlbumAsset(albumId: album2.id, assetId: asset2.id);
+        expect(await sut.getSortedAlbumIds([album1.id, album2.id], aggregation: .end), [album1.id, album2.id]);
+        return (album1: album1.id, album2: album2.id, asset1: asset1.id);
+      }
+
+      test('an album gains an asset', () async {
+        final (:album1, :album2, asset1: _) = await seed();
+        final newer = await ctx.newRemoteAsset(ownerId: userId, createdAt: DateTime(2024, 1, 30));
+        await ctx.newRemoteAlbumAsset(albumId: album1, assetId: newer.id);
+
+        expect(await sut.getSortedAlbumIds([album1, album2], aggregation: .end), [album2, album1]);
+      });
+
+      test('an asset date changes', () async {
+        final (:album1, :album2, :asset1) = await seed();
+        await (ctx.db.update(ctx.db.remoteAssetEntity)..where((row) => row.id.equals(asset1))).write(
+          RemoteAssetEntityCompanion(localDateTime: Value(DateTime.utc(2024, 1, 30))),
+        );
+
+        expect(await sut.getSortedAlbumIds([album1, album2], aggregation: .end), [album2, album1]);
+      });
     });
   });
 }

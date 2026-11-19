@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:drift/drift.dart';
 import 'package:immich_mobile/constants/enums.dart';
@@ -416,29 +415,78 @@ class RemoteAlbumRepository extends DatabaseAccessor<Drift> with $RemoteAlbumRep
       return [];
     }
 
-    final jsonIds = jsonEncode(albumIds);
-    final sqlAgg = aggregation == AssetDateAggregation.start ? 'MIN' : 'MAX';
+    final dates = await _albumAssetDates();
+    final sorted = [
+      for (final id in albumIds)
+        if (dates[id] case final range?)
+          (id: id, date: aggregation == AssetDateAggregation.start ? range.start : range.end),
+    ];
+    // NULL dates sort first, as in SQL
+    sorted.sort((a, b) => (a.date ?? '').compareTo(b.date ?? ''));
+    return [for (final album in sorted) album.id];
+  }
 
+  // Oldest and newest raw local_date_time per album with assets. Computing it
+  // looks up every album asset in the wide asset table, which took seconds on
+  // a phone with a large library each time an album list was sorted by date,
+  // so it is computed for all albums at once and kept until either table is
+  // written to (drift reports writes from other isolates too).
+  Map<String, ({String? start, String? end})>? _assetDates;
+  Future<Map<String, ({String? start, String? end})>>? _assetDatesLoad;
+  // A drift accessor lives as long as its database, as does this subscription.
+  // ignore: cancel_subscriptions
+  StreamSubscription<Set<TableUpdate>>? _assetDatesInvalidation;
+  int _assetDatesGeneration = 0;
+
+  Future<Map<String, ({String? start, String? end})>> _albumAssetDates() async {
+    // drift delivers update notifications asynchronously; let any for a write
+    // that already completed arrive before trusting the cache
+    await Future<void>(() {});
+    final cached = _assetDates;
+    if (cached != null) {
+      return cached;
+    }
+
+    _assetDatesInvalidation ??= _db
+        .tableUpdates(TableUpdateQuery.onAllTables([_db.remoteAlbumAssetEntity, _db.remoteAssetEntity]))
+        .listen((_) {
+          _assetDatesGeneration++;
+          _assetDates = null;
+          _assetDatesLoad = null;
+        });
+
+    return _assetDatesLoad ??= _loadAlbumAssetDates();
+  }
+
+  Future<Map<String, ({String? start, String? end})>> _loadAlbumAssetDates() async {
+    final generation = _assetDatesGeneration;
     final rows = await _db
         .customSelect(
           '''
           SELECT
             raae.album_id,
-            $sqlAgg(rae.local_date_time) AS asset_date
-          FROM json_each(?) ids
-          INNER JOIN remote_album_asset_entity raae
-            ON raae.album_id = ids.value
+            MIN(rae.local_date_time) AS start_date,
+            MAX(rae.local_date_time) AS end_date
+          FROM remote_album_asset_entity raae
           INNER JOIN remote_asset_entity rae
             ON rae.id = raae.asset_id
           GROUP BY raae.album_id
-          ORDER BY asset_date ASC
           ''',
-          variables: [Variable<String>(jsonIds)],
           readsFrom: {_db.remoteAlbumAssetEntity, _db.remoteAssetEntity},
         )
         .get();
 
-    return rows.map((row) => row.read<String>('album_id')).toList();
+    final dates = {
+      for (final row in rows)
+        row.read<String>('album_id'): (start: row.read<String?>('start_date'), end: row.read<String?>('end_date')),
+    };
+    // a write during the query may not be reflected, so only keep a clean result
+    if (generation == _assetDatesGeneration) {
+      _assetDates = dates;
+    } else {
+      _assetDatesLoad = null;
+    }
+    return dates;
   }
 
   Future<int> getCount() {

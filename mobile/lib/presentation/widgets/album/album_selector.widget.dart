@@ -62,6 +62,10 @@ class _AlbumSelectorState extends ConsumerState<AlbumSelector> {
         isGrid = albumConfig.isGrid;
       });
 
+      // show the albums already loaded right away; the refresh re-sorts on change
+      if (ref.read(remoteAlbumProvider).albums.isNotEmpty) {
+        unawaited(sortAlbums());
+      }
       unawaited(ref.read(remoteAlbumProvider.notifier).refresh());
     });
 
