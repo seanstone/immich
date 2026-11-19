@@ -10,6 +10,9 @@ const kForkIndexes = <String>[
   // alone. Upstream's idx_remote_asset_group lacks stack_id, which forces a
   // table lookup for every timeline asset.
   'CREATE INDEX IF NOT EXISTS idx_remote_asset_timeline_group ON remote_asset_entity (owner_id, visibility, deleted_at, group_date DESC, created_at DESC, id DESC, stack_id)',
+  // Seeks the newest favorite in a date range for the year and month overview
+  // covers. Partial, so it only holds favorites.
+  'CREATE INDEX IF NOT EXISTS idx_remote_asset_timeline_favorite ON remote_asset_entity (owner_id, visibility, deleted_at, group_date DESC, created_at DESC, id DESC, stack_id) WHERE is_favorite = 1',
   // Covers the album list's per-membership trash check.
   'CREATE INDEX IF NOT EXISTS idx_remote_asset_id_deleted ON remote_asset_entity (id, deleted_at)',
   // Covers the backed-up check that hides local assets with a remote copy.

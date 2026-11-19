@@ -8,12 +8,20 @@ import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 
 /// Mapping of pinch to zoom on the timeline grid to the number of columns displayed. Directly drives the `timelineTilesPerRow` setting
 class TimelinePinchZoom extends ConsumerStatefulWidget {
-  const TimelinePinchZoom({super.key, required this.onColumnCountWillChange, required this.child});
+  const TimelinePinchZoom({
+    super.key,
+    required this.onColumnCountWillChange,
+    this.onPinchOutPastMinimum,
+    required this.child,
+  });
 
   /// Callback when a column count change is expected
   ///
   /// This is called immediately before the new count is written to the setting, while the gesture is still actively resolving
   final VoidCallback onColumnCountWillChange;
+
+  /// Called once per gesture when pinching out well past the densest grid
+  final VoidCallback? onPinchOutPastMinimum;
 
   final Widget child;
 
@@ -25,6 +33,7 @@ class _TimelinePinchZoomState extends ConsumerState<TimelinePinchZoom> {
   int _perRow = 4;
   double _scaleFactor = 3.0;
   double _baseScaleFactor = 3.0;
+  bool _pastMinimumReported = false;
 
   @override
   void initState() {
@@ -44,9 +53,19 @@ class _TimelinePinchZoomState extends ConsumerState<TimelinePinchZoom> {
           (_CustomScaleGestureRecognizer scale) {
             scale.onStart = (details) {
               _baseScaleFactor = _scaleFactor;
+              _pastMinimumReported = false;
             };
 
             scale.onUpdate = (details) {
+              final onPinchOutPastMinimum = widget.onPinchOutPastMinimum;
+              if (onPinchOutPastMinimum != null &&
+                  !_pastMinimumReported &&
+                  details.pointerCount >= 2 &&
+                  _baseScaleFactor * details.scale < 0.7) {
+                _pastMinimumReported = true;
+                onPinchOutPastMinimum();
+                return;
+              }
               final newScaleFactor = math.max(math.min(5.0, _baseScaleFactor * details.scale), 1.0);
               final newPerRow = 7 - newScaleFactor.toInt();
 

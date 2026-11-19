@@ -73,4 +73,17 @@ void main() {
     );
     expect(details, contains('COVERING INDEX idx_remote_asset_timeline_group'));
   });
+
+  test('the favorite cover query seeks the partial favorites index', () async {
+    await ensureForkIndexes(db);
+    final details = await plan(
+      'SELECT rae.id FROM remote_asset_entity rae '
+      'WHERE rae.deleted_at IS NULL AND rae.visibility = 0 AND rae.owner_id IN (?) AND rae.group_date IS NOT NULL '
+      'AND rae.group_date >= ? AND rae.group_date < ? AND rae.is_favorite = 1 '
+      'ORDER BY rae.group_date DESC, rae.created_at DESC, rae.id DESC LIMIT 1',
+      [Variable.withString('u'), Variable.withString('2024-03-01'), Variable.withString('2024-04-01')],
+    );
+    expect(details, contains('idx_remote_asset_timeline_favorite'));
+    expect(details, isNot(contains('TEMP B-TREE')));
+  });
 }

@@ -88,6 +88,20 @@ class TimelineRepository extends DatabaseAccessor<Drift> with $TimelineRepositor
     ),
   );
 
+  /// The asset representing [rangeStart, rangeEnd) of the main timeline, two
+  /// group_date strings: its newest favorite, or else its newest asset.
+  Future<BaseAsset?> mainCover(List<String> userIds, {required String rangeStart, required String rangeEnd}) async {
+    final favorite = await _db.mergedAssetDrift
+        .mergedAssetFavoriteCover(userIds: userIds, rangeStart: rangeStart, rangeEnd: rangeEnd)
+        .getSingleOrNull();
+    final row =
+        favorite ??
+        await _db.mergedAssetDrift
+            .mergedAssetCover(userIds: userIds, rangeStart: rangeStart, rangeEnd: rangeEnd)
+            .getSingleOrNull();
+    return row == null ? null : _toMainAsset(row);
+  }
+
   TimelinePage _toMainPage(List<MergedAssetRow> rows) => (
     assets: rows.map(_toMainAsset).toList(),
     cursors: [for (final row in rows) (groupDate: row.groupDate!, createdAt: row.sortCreatedAt, id: row.sortId)],

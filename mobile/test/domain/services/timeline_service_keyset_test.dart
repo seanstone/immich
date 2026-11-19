@@ -106,4 +106,10 @@ void main() {
     await expectAssets(4990, 10);
     expect(library.calls, ['older 4926']);
   });
+
+  test('replays the loaded buckets to new listeners without querying again', () async {
+    final buckets = await sut.watchLoadedBuckets().first;
+    expect(buckets, [TimeBucket(date: DateTime(2025), assetCount: _total)]);
+    expect(library.calls, isEmpty);
+  });
 }

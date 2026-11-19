@@ -1,4 +1,6 @@
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:immich_mobile/data/db/main/table/remote/asset.drift.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/domain/services/timeline.service.dart';
 import 'package:immich_mobile/infrastructure/repositories/timeline.repository.dart';
@@ -119,6 +121,46 @@ void main() {
         }
         expect(walked, reference, reason: 'page size $size');
       }
+    });
+  });
+
+  group('main timeline cover', () {
+    test('picks the newest favorite in the range, else the newest asset, ignoring the range end', () async {
+      final user = await ctx.newUser();
+      Future<String> remote(String checksum, DateTime localDate, {bool favorite = false}) async =>
+          (await ctx.newRemoteAsset(
+            ownerId: user.id,
+            checksum: checksum,
+            createdAt: localDate.toUtc(),
+            localDateTime: localDate,
+            isFavorite: favorite,
+          )).id;
+
+      final oldFavorite = await remote('fav', DateTime(2024, 3, 5), favorite: true);
+      final newest = await remote('newest', DateTime(2024, 3, 30));
+      await remote('next-month', DateTime(2024, 4, 1));
+
+      final march = await sut.mainCover([user.id], rangeStart: '2024-03-01', rangeEnd: '2024-04-01');
+      expect((march! as RemoteAsset).id, oldFavorite);
+
+      await (ctx.db.update(ctx.db.remoteAssetEntity)..where((row) => row.id.equals(oldFavorite))).write(
+        const RemoteAssetEntityCompanion(isFavorite: Value(false)),
+      );
+      final unfavorited = await sut.mainCover([user.id], rangeStart: '2024-03-01', rangeEnd: '2024-04-01');
+      expect((unfavorited! as RemoteAsset).id, newest);
+
+      expect(await sut.mainCover([user.id], rangeStart: '2024-05-01', rangeEnd: '2024-06-01'), isNull);
+    });
+
+    test('includes local assets that are not backed up', () async {
+      final user = await ctx.newUser();
+      await ctx.newRemoteAsset(ownerId: user.id, checksum: 'remote', createdAt: DateTime.utc(2024, 3, 2, 12));
+      final album = await ctx.newLocalAlbum(backupSelection: .selected);
+      final local = await ctx.newLocalAsset(checksum: 'local', createdAt: DateTime.utc(2024, 3, 20, 12));
+      await ctx.newLocalAlbumAsset(albumId: album.id, assetId: local.id);
+
+      final cover = await sut.mainCover([user.id], rangeStart: '2024-03-01', rangeEnd: '2024-04-01');
+      expect((cover! as LocalAsset).id, local.id);
     });
   });
 

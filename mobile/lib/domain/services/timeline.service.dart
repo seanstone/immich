@@ -122,6 +122,10 @@ class TimelineService {
   // Sort keys for [_buffer], filled only when the timeline has a keyset source
   List<TimelineCursor> _cursors = [];
   StreamSubscription? _bucketSubscription;
+  // The buckets last loaded, kept for views that summarise this timeline (e.g.
+  // the year and month overview) without running the bucket query again
+  List<Bucket>? _loadedBuckets;
+  final _loadedBucketUpdates = StreamController<List<Bucket>>.broadcast();
 
   int _totalAssets = 0;
   int get totalAssets => _totalAssets;
@@ -166,6 +170,11 @@ class TimelineService {
 
           // change the state's total assets count only after the buffer is reloaded
           _totalAssets = totalAssets;
+          _loadedBuckets = buckets;
+          // a reload can finish after dispose
+          if (!_loadedBucketUpdates.isClosed) {
+            _loadedBucketUpdates.add(buckets);
+          }
           EventStream.shared.emit(const TimelineReloadEvent());
         }),
       );
@@ -173,6 +182,16 @@ class TimelineService {
   }
 
   Stream<List<Bucket>> Function() get watchBuckets => _bucketSource;
+
+  /// The buckets this timeline has loaded: the current ones, if loaded yet, then
+  /// each reload. Unlike [watchBuckets], this does not query the database.
+  Stream<List<Bucket>> watchLoadedBuckets() async* {
+    final loaded = _loadedBuckets;
+    if (loaded != null) {
+      yield loaded;
+    }
+    yield* _loadedBucketUpdates.stream;
+  }
 
   Future<List<BaseAsset>> loadAssets(int index, int count) => _mutex.run(() => _loadAssets(index, count));
 
@@ -307,6 +326,7 @@ class TimelineService {
   Future<void> dispose() async {
     await _bucketSubscription?.cancel();
     _bucketSubscription = null;
+    await _loadedBucketUpdates.close();
     _buffer = [];
     _cursors = [];
     _bufferOffset = 0;

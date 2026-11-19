@@ -45,6 +45,7 @@ class Timeline extends ConsumerWidget {
     this.readOnly = false,
     this.persistentBottomBar = false,
     this.loadingWidget,
+    this.onPinchOutPastMinimum,
   });
 
   final Widget? topSliverWidget;
@@ -60,6 +61,10 @@ class Timeline extends ConsumerWidget {
   final bool readOnly;
   final bool persistentBottomBar;
   final Widget? loadingWidget;
+
+  /// Called when pinching out past the densest grid, with the date of the
+  /// segment at the middle of the viewport (null if it has none)
+  final void Function(DateTime? date)? onPinchOutPastMinimum;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -93,6 +98,7 @@ class Timeline extends ConsumerWidget {
             snapToMonth: snapToMonth,
             maxWidth: constraints.maxWidth,
             loadingWidget: loadingWidget,
+            onPinchOutPastMinimum: onPinchOutPastMinimum,
           ),
         );
       },
@@ -123,6 +129,7 @@ class _SliverTimeline extends ConsumerStatefulWidget {
     this.snapToMonth = true,
     this.maxWidth,
     this.loadingWidget,
+    this.onPinchOutPastMinimum,
   });
 
   final Widget? topSliverWidget;
@@ -135,6 +142,7 @@ class _SliverTimeline extends ConsumerStatefulWidget {
   final bool snapToMonth;
   final double? maxWidth;
   final Widget? loadingWidget;
+  final void Function(DateTime? date)? onPinchOutPastMinimum;
 
   @override
   ConsumerState createState() => _SliverTimelineState();
@@ -275,6 +283,16 @@ class _SliverTimelineState extends ConsumerState<_SliverTimeline> with WidgetsBi
     return false;
   }
 
+  DateTime? _dateAtViewportMiddle(List<Segment> segments) {
+    if (!_scrollController.hasClients) {
+      return null;
+    }
+    final position = _scrollController.position;
+    final middle = (position.pixels + position.viewportDimension / 2).clamp(0.0, position.maxScrollExtent);
+    final bucket = (segments.findByOffset(middle) ?? segments.lastOrNull)?.bucket;
+    return bucket is TimeBucket ? bucket.date : null;
+  }
+
   void _scrollToTop() {
     if (!_scrollController.hasClients) {
       return;
@@ -368,7 +386,11 @@ class _SliverTimelineState extends ConsumerState<_SliverTimeline> with WidgetsBi
                     context.padding.bottom + (isMultiSelectEnabled ? bottomSheetOpenModifier : 0);
                 final scrubberBottomPadding = contentBottomPadding + kScrubberThumbHeight;
 
+                final onPinchOutPastMinimum = widget.onPinchOutPastMinimum;
                 return TimelinePinchZoom(
+                  onPinchOutPastMinimum: onPinchOutPastMinimum == null
+                      ? null
+                      : () => onPinchOutPastMinimum(_dateAtViewportMiddle(segments)),
                   onColumnCountWillChange: () {
                     final targetAssetIndex = _getCurrentAssetIndex(segments);
                     setState(() {
