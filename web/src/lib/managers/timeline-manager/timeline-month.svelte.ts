@@ -274,6 +274,11 @@ export class TimelineMonth {
       return;
     }
     const timelineManager = this.timelineManager;
+    // On libraries past the scroll-box cap, scrollTop maps to layout through a factor that
+    // depends on the total height, so every height change rescales where the viewport sits.
+    // Remember the layout position now, before the factor moves.
+    const factorBefore = timelineManager.maxScrollPercent;
+    const layoutTopBefore = timelineManager.scrollToLayout(timelineManager.scrollTop);
     const index = timelineManager.months.indexOf(this);
     const heightDelta = height - this.#height;
     this.#height = height;
@@ -294,20 +299,37 @@ export class TimelineMonth {
         timelineMonth.#top = newTop;
       }
     }
-    if (!timelineManager.viewportTopMonthIntersection) {
+    const compressed = factorBefore < 0.999 || timelineManager.maxScrollPercent < 0.999;
+    const anchorLayoutY = this.#viewportAnchorAfterResize(index, heightDelta, height, layoutTopBefore);
+    if (!compressed) {
+      if (anchorLayoutY !== undefined) {
+        timelineManager.scrollTo(anchorLayoutY);
+      }
       return;
     }
-    const { month, monthBottomViewportRatio, viewportTopRatioInMonth } = timelineManager.viewportTopMonthIntersection;
-    const currentIndex = month ? timelineManager.months.indexOf(month) : -1;
+    // Always re-anchor when compressed: even a month below the viewport changes the factor.
+    const target = anchorLayoutY ?? layoutTopBefore;
+    if (target !== timelineManager.scrollToLayout(timelineManager.scrollTop)) {
+      timelineManager.scrollTo(timelineManager.layoutToScroll(target));
+    }
+  }
+
+  /** The layout y the viewport top should move to after this month resized, if it should move. */
+  #viewportAnchorAfterResize(index: number, heightDelta: number, height: number, layoutTopBefore: number) {
+    const intersection = this.timelineManager.viewportTopMonthIntersection;
+    if (!intersection) {
+      return;
+    }
+    const { month, monthBottomViewportRatio, viewportTopRatioInMonth } = intersection;
+    const currentIndex = month ? this.timelineManager.months.indexOf(month) : -1;
     if (!month || currentIndex <= 0 || index > currentIndex) {
       return;
     }
     if (index < currentIndex || monthBottomViewportRatio < 1) {
-      // heightDelta is in LAYOUT space; scrollBy expects DOM-scroll space.
-      timelineManager.scrollBy(timelineManager.layoutToScroll(heightDelta));
-    } else if (index === currentIndex) {
-      const scrollToLayoutY = this.top + height * viewportTopRatioInMonth;
-      timelineManager.scrollTo(timelineManager.layoutToScroll(scrollToLayoutY));
+      return layoutTopBefore + heightDelta;
+    }
+    if (index === currentIndex) {
+      return this.top + height * viewportTopRatioInMonth;
     }
   }
 

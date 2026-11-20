@@ -945,3 +945,64 @@ describe('TimelineManager', () => {
     });
   });
 });
+
+describe('TimelineManager past the scroll-box cap', () => {
+  let timelineManager: TimelineManager;
+  class FakeScrollBox {
+    scrollTop = 0;
+    scrollTo({ top }: { top: number }) {
+      this.scrollTop = Math.max(0, top);
+    }
+    scrollBy(_: number, y: number) {
+      this.scrollTop = Math.max(0, this.scrollTop + y);
+    }
+  }
+
+  beforeEach<Context>(async ({ api }) => {
+    timelineManager = new TimelineManager();
+    api.on({
+      getTimeBuckets: () => ({
+        json: Array.from({ length: 240 }, (_, index) => ({
+          count: 20_000,
+          timeBucket: `${2025 - Math.floor(index / 12)}-${String(12 - (index % 12)).padStart(2, '0')}-01`,
+        })),
+      }),
+      getTimeBucket: () => new Promise(() => {}),
+    });
+    await timelineManager.updateViewport({ width: 1588, height: 1000 });
+    await tick();
+    timelineManager.scrollableElement = new FakeScrollBox() as unknown as HTMLElement;
+  });
+
+  const layoutTop = () => timelineManager.scrollToLayout(timelineManager.scrollTop);
+
+  // a month in the middle, with months above and below it
+  const scrollToMiddleMonth = () => {
+    const month = timelineManager.months[120];
+    timelineManager.scrollTo(timelineManager.layoutToScroll(month.top + month.height / 3));
+    return month;
+  };
+
+  test('is compressed', () => {
+    expect(timelineManager.maxScrollPercent).toBeLessThan(0.5);
+  });
+
+  test('keeps the viewport still when a month below it resizes', () => {
+    const month = scrollToMiddleMonth();
+    const offsetInMonth = layoutTop() - month.top;
+
+    timelineManager.months[200].height += 500_000;
+
+    expect(layoutTop() - month.top).toBeCloseTo(offsetInMonth, 0);
+  });
+
+  test('keeps the viewport still when a month above it resizes', () => {
+    const month = scrollToMiddleMonth();
+    const offsetInMonth = layoutTop() - month.top;
+
+    timelineManager.months[40].height -= 300_000;
+    timelineManager.months[10].height += 700_000;
+
+    expect(layoutTop() - month.top).toBeCloseTo(offsetInMonth, 0);
+  });
+});
